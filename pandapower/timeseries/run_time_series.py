@@ -13,6 +13,9 @@ from pandapower.control.run_control import ControllerNotConverged, prepare_run_c
 from pandapower.control.util.diagnostic import control_diagnostic
 from pandapower.timeseries.output_writer import OutputWriter
 
+import numpy as np
+from pandapower.toolbox import write_to_net
+
 try:
     import pandaplan.core.pplog as pplog
 except ImportError:
@@ -102,7 +105,6 @@ def output_writer_routine(net, time_step, pf_converged, ctrl_converged, recycle_
 def _call_output_writer(net, time_step, pf_converged, ctrl_converged, ts_variables):
     output_writer_routine(net, time_step, pf_converged, ctrl_converged, ts_variables['recycle_options'])
 
-
 def run_time_step(net, time_step, ts_variables, run_control_fct=run_control, output_writer_fct=_call_output_writer,
                   **kwargs):
     """
@@ -118,12 +120,13 @@ def run_time_step(net, time_step, ts_variables, run_control_fct=run_control, out
     """
     ctrl_converged = True
     pf_converged = True
+
+    #Calculate the PF for the current time step
     # run time step function for each controller
-
     control_time_step(ts_variables['controller_order'], time_step)
-
     try:
         # calls controller init, control steps and run function (runpp usually is called in here)
+        #run_control.py
         run_control_fct(net, ctrl_variables=ts_variables, **kwargs)
     except ControllerNotConverged:
         ctrl_converged = False
@@ -137,6 +140,153 @@ def run_time_step(net, time_step, ts_variables, run_control_fct=run_control, out
     output_writer_fct(net, time_step, pf_converged, ctrl_converged, ts_variables)
 
     finalize_step(ts_variables['controller_order'], time_step)
+
+
+#Mauri
+def get_state(ts_variables, time_step):
+    loadp_controller = ts_variables['controller_order'][0][0][0] #First index is the level, the second the tuple (controller,net), the third the controller
+    loadq_controller = ts_variables['controller_order'][0][1][0]
+    genp_controller = ts_variables['controller_order'][0][2][0]
+
+    state_load_p = loadp_controller.data_source.get_time_step_value(time_step=time_step,
+                                                       profile_name=loadp_controller.profile_name,
+                                                       scale_factor=loadp_controller.scale_factor)
+    state_load_q = loadq_controller.data_source.get_time_step_value(time_step=time_step,
+                                                       profile_name=loadq_controller.profile_name,
+                                                       scale_factor=loadq_controller.scale_factor)
+    state_gen_p = genp_controller.data_source.get_time_step_value(time_step=time_step,
+                                                       profile_name=genp_controller.profile_name,
+                                                       scale_factor=genp_controller.scale_factor)
+    state = np.concatenate([state_load_p,state_load_q,state_gen_p])
+    return state
+
+def volatge_violation_function(vm_pus):
+	violations = []
+	for vm in vm_pus:
+		diff = 1-vm
+		a = 0.7
+		m = 1
+		q = a*(0.05**2) - m * 0.05
+		if(np.abs(diff)<0.05):
+			v = a*(np.abs(diff)**2)
+		elif(diff>0):
+			v = m * diff + q
+		else:
+			v = -m * diff + q
+		violations.append(v)
+	return violations
+
+def run_time_step_rl(net, time_step, rlagent, save, train, ts_variables, run_control_fct=run_control, output_writer_fct=_call_output_writer,
+                  **kwargs):
+    """
+    Time Series step function
+    Is called to run the PANDAPOWER AC power flows with the timeseries module
+
+    INPUT:
+        **net** - The pandapower format network
+
+        **time_step** (int) - time_step to be calculated
+
+        **ts_variables** (dict) - contains settings for controller and time series simulation. See init_time_series()
+    """
+    ctrl_converged = True
+    pf_converged = True
+
+    #Mauri
+    #RL agent action must be here to affectively apply changes
+
+    ### --- Get state --- ###
+    state = get_state(ts_variables,time_step)
+
+    ### --- Choose action --- ###
+    action = rlagent.choose_action(state, explore=train)
+    action = action.numpy()
+    #Apply the chosen action -> curtail the generators at time step t+1
+    genp_controller = ts_variables['controller_order'][0][2][0]
+    genq_controller = ts_variables['controller_order'][0][3][0]
+    max_timestep = genp_controller.data_source.get_time_steps_len()
+    if(time_step+1<max_timestep):
+        next_gen_p = genp_controller.data_source.get_time_step_value(time_step=time_step+1,
+                                                       profile_name=genp_controller.profile_name,
+                                                       scale_factor=1)
+        updated_values = next_gen_p * (1-action)
+        genp_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genp_controller.profile_name, values=updated_values)
+        next_gen_p = genp_controller.data_source.get_time_step_value(time_step=time_step+1,
+                                                       profile_name=genp_controller.profile_name,
+                                                       scale_factor=1)
+        updated_values =  -action/5
+        genq_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genq_controller.profile_name, values=updated_values)
+
+    ### --- Run PF --- ###
+    #Calculate the PF for the current time step
+    # run time step function for each controller
+    control_time_step(ts_variables['controller_order'], time_step)
+    try:
+        # calls controller init, control steps and run function (runpp usually is called in here)
+        run_control_fct(net, ctrl_variables=ts_variables, **kwargs)
+    except ControllerNotConverged:
+        ctrl_converged = False
+        # If controller did not converge do some stuff
+        # controller_not_converged(time_step, ts_variables)
+    except ts_variables['errors']:
+        # If power flow did not converge simulation aborts or continues if continue_on_divergence is True
+        pf_converged = False
+        # pf_not_converged(time_step, ts_variables)
+
+    ### --- Calculate reward --- ###
+    vm_pus = net.res_bus.vm_pu.drop(58) #Remove external source
+    max_vm_pu = np.max(vm_pus)
+    # print(f'Max: {max_vm_pu}, max: {np.min(vm_pus)}, mean: {np.mean(vm_pus)}, sum: {np.sum(vm_pus)}')
+    min_vm_pu = np.min(vm_pus)
+    #Punish the agent to curtail the generator too much
+    #TODO improve the reward function!!
+    curtailment_percent = np.sum(action)
+    alpha = 50
+    beta = 5000
+    #First try (bad results)
+    tollerance = 0.6
+    max_vm_pu_value = 1 + tollerance / 2
+    min_vm_pu_value = 1 - + tollerance / 2
+    # reward = - alpha * curtailment_percent #- beta*(np.abs(1.05-max_vm_pu)+0.5*np.abs(0.95-min_vm_pu))
+    # reward = reward * beta*np.abs(max_vm_pu_value-max_vm_pu) if max_vm_pu_value-max_vm_pu<0 else reward
+    # reward = reward * beta*np.abs(min_vm_pu_value-min_vm_pu) if min_vm_pu_value-min_vm_pu>0 else reward
+    # if(time_step%2000==0 and time_step>0):
+    #     print(f'###DEBUG###\nTime step: {time_step}, \nSum curtailment[%]: {(curtailment_percent):.3f}, \nOvervoltage penalty: {(np.abs(1.05-max_vm_pu)):.4f}({max_vm_pu:.4f}), \nUndervoltage penalty: {(np.abs(0.95-min_vm_pu)):.4f}({min_vm_pu:.4f}), \nTotal reward: {(reward):.3f}')
+    #Second try
+    reward = - alpha * curtailment_percent
+    volatge_violation = np.sum(volatge_violation_function(vm_pus))
+    reward = reward - beta * volatge_violation
+    # if(time_step%2000==0 and time_step>0):
+    #     print(f'###DEBUG###\nTime step: {time_step}, \nSum curtailment[%]: {(curtailment_percent):.3f}, \nVoltage penalty: {volatge_violation:.4f}, \nTotal reward: {(reward):.3f}')
+
+    rlagent.history.append(reward)
+    #Keep track of the curtailment as % and the actual value as MW -> [%, kW]
+    if(time_step+1<max_timestep):
+        rlagent.curtailment.append([curtailment_percent, np.sum(next_gen_p * curtailment_percent)])
+
+
+    ### --- Next state --- ###
+    next_state = None
+    if(time_step+1<max_timestep):
+        next_state = get_state(ts_variables,time_step+1)
+
+    ### --- Check system condition --- ###
+    done = True if (not ctrl_converged or not pf_converged) else False
+
+    if(save):
+        output_writer_fct(net, time_step, pf_converged, ctrl_converged, ts_variables)
+
+    finalize_step(ts_variables['controller_order'], time_step)
+
+    ### --- Store experience --- ###
+    if(next_state is not None and train):
+        rlagent.save_experience(state, action, reward, next_state, done)
+
+    if(train):
+        rlagent.learn()
+        rlagent.increment_step_counter()
+
+    return done
 
 
 def _check_controller_recyclability(net):
@@ -306,7 +456,7 @@ def print_progress(i, time_step, time_steps, verbose, **kwargs):
         func(i, time_step, time_steps, **kwargs)
 
 
-def run_loop(net, ts_variables, run_control_fct=run_control, output_writer_fct=_call_output_writer, **kwargs):
+def run_loop(net, ts_variables, rlagent=None, save=True, train=True, run_control_fct=run_control, output_writer_fct=_call_output_writer, **kwargs):
     """
     runs the time series loop which calls pp.runpp (or another run function) in each iteration
 
@@ -319,10 +469,18 @@ def run_loop(net, ts_variables, run_control_fct=run_control, output_writer_fct=_
     for i, time_step in enumerate(ts_variables["time_steps"]):
         print_progress(i, time_step, ts_variables["time_steps"], ts_variables["verbose"], ts_variables=ts_variables,
                        **kwargs)
-        run_time_step(net, time_step, ts_variables, run_control_fct, output_writer_fct, **kwargs)
+        if(rlagent is None):
+            run_time_step(net, time_step, ts_variables, run_control_fct, output_writer_fct, **kwargs)
+        else:
+            done = run_time_step_rl(net, time_step, rlagent, save, train, ts_variables, run_control_fct, output_writer_fct, **kwargs)
+            if(done):
+                print(f'Diverged at time step: {time_step}. Starting a new episode')
+                break
+        # if(i>4):
+        #     break
 
 
-def run_timeseries(net, time_steps=None, continue_on_divergence=False, verbose=True, **kwargs):
+def run_timeseries(net, time_steps=None, rlagent=None, save=True, train=True, continue_on_divergence=False, verbose=True, **kwargs):
     """
     Time Series main function
 
@@ -350,7 +508,7 @@ def run_timeseries(net, time_steps=None, continue_on_divergence=False, verbose=T
     cleanup(net, ts_variables)
 
     control_diagnostic(net)
-    run_loop(net, ts_variables, **kwargs)
+    run_loop(net, ts_variables, rlagent, save, train, **kwargs)
 
     # cleanup functions after the last time step was calculated
     cleanup(net, ts_variables)

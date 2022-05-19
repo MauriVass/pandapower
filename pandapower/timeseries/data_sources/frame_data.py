@@ -52,5 +52,8 @@ class DFData(DataSource):
         res = res*scale_factor
         return res
 
+    def set_time_step_value(self, time_step, profile_name, values):
+        self.df.loc[time_step, profile_name] = values
+
     def get_time_steps_len(self):
         return len(self.df)

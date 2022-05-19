@@ -590,3 +590,9 @@ class OutputWriter(JSONSerializableClass):
                 self.output[output_name] = pd.DataFrame(data=results[table][variable], index=self.time_steps)
                 new_output_list.append((table, variable))
             self.output_list = new_output_list
+
+    def get_values(self, column, timestep):
+        print(self.output_list)
+        values = self.np_results[column][timestep]
+        print(np.sum(values))
+        return values
