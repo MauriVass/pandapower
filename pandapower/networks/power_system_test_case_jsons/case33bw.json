@@ -411,15 +411,6 @@
         "cq2_eur_per_mvar2": "float64"
       }
     },
-    "characteristic": {
-      "_module": "pandas.core.frame",
-      "_class": "DataFrame",
-      "_object": "{\"columns\":[\"object\"],\"index\":[],\"data\":[]}",
-      "orient": "split",
-      "dtype": {
-        "object": "object"
-      }
-    },
     "controller": {
       "_module": "pandas.core.frame",
       "_class": "DataFrame",
@@ -454,7 +445,7 @@
         "coords": "object"
       }
     },
-    "version": "2.9.0",
+    "version": "2.7.1",
     "converged": true,
     "name": "",
     "f_hz": 60,
