@@ -212,6 +212,7 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         action_len = int(len(action)/2)
         action_p = action[:action_len]
         action_q = action[action_len:]
+        # action_q = action
         # print(action.shape)
         # print(action_p.shape)
         # print(action_q.shape)
@@ -274,47 +275,47 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         # voltage_violation = np.sum(volatge_violation_function(vm_pus))
         # reward_volt_viol = - beta * voltage_violation
         #
-        # is_critial_situation = np.max(vm_pus) > 1.05
-        # reward_result = gamma * (vm_pu_labels[time_step] - 2 * is_critial_situation)
-        # reward = reward_curt + reward_volt_viol + reward_result
+        # is_critical_situation = np.max(vm_pus) > 1.05
+        # reward_crit_solved = gamma * (vm_pu_labels[time_step] - 2 * is_critical_situation)
+        # reward = reward_curt + reward_volt_viol + reward_crit_solved
         #Cases:
-        # 0 - 0 - no critial situation before and after the agent's action (OK, nothing happens)
-        # 0 - 1 - no critial situation before but introduced after the agent's action (WORST POSSIBLE CASE, -2*gamma punishment)
-        # 1 - 0 - critial situation before and solved after the agent's action (BEST POSSIBLE CASE, +gamma reward)
-        # 1 - 1 - critial situation before and after the agent's action (NOT REALLY OK, -gamma punishment)
+        # 0 - 0 - no critical situation before and after the agent's action (OK, nothing happens)
+        # 0 - 1 - no critical situation before but introduced after the agent's action (WORST POSSIBLE CASE, -2*gamma punishment)
+        # 1 - 0 - critical situation before and solved after the agent's action (BEST POSSIBLE CASE, +gamma reward)
+        # 1 - 1 - critical situation before and after the agent's action (NOT REALLY OK, -gamma punishment)
 
         ###Third try. RF #3
         curtailment_percent = np.sum(action_p)
         reacrive_power_changes = np.sum(np.abs(action_q))
-        alpha_p = 200      #20 #good resutls (nice plot, lot of unwanted p, lot of uv)
-        alpha_q = 100      #2
-        beta = 800         #100
-        gamma = 100        #200
+        alpha_p = 1      #20 #good resutls (nice plot, lot of unwanted p, lot of uv)
+        alpha_q = 0.5      #2
+        beta = 20         #100
+        gamma = 5        #200
         reward_p = - alpha_p * curtailment_percent
         reward_q = - alpha_q * reacrive_power_changes
 
         voltage_violation = np.sum(volatge_violation_function(vm_pus))
         reward_volt_viol = - beta * voltage_violation
 
-        is_critial_situation = np.max(vm_pus) > 1.05 or np.min(vm_pus) < 0.95
+        is_critical_situation = np.max(vm_pus) > 1.05 or np.min(vm_pus) < 0.95
         if(vm_pu_labels is not None):
-            reward_result = gamma * (vm_pu_labels[time_step] - 4 * is_critial_situation + 1)
+            reward_crit_solved = gamma * (vm_pu_labels[time_step] - 4 * is_critical_situation + 1)
             #Cases:
-            # 0 - 0 - no critial situation before and after the agent's action (OK, +1gamma reward)
-            # 0 - 1 - no critial situation before but introduced after the agent's action (WORST POSSIBLE CASE, -3*gamma punishment)
-            # 1 - 0 - critial situation before and solved after the agent's action (BEST POSSIBLE CASE, +2gamma reward)
-            # 1 - 1 - critial situation before and after the agent's action (NOT REALLY OK, -2gamma punishment)
+            # 0 - 0 - no critical situation before and after the agent's action (OK, +1gamma reward)
+            # 0 - 1 - no critical situation before but introduced after the agent's action (WORST POSSIBLE CASE, -3*gamma punishment)
+            # 1 - 0 - critical situation before and solved after the agent's action (BEST POSSIBLE CASE, +2gamma reward)
+            # 1 - 1 - critical situation before and after the agent's action (NOT REALLY OK, -2gamma punishment)
         else:
-            reward_result = 0
-        reward = reward_p + reward_q + reward_volt_viol + reward_result
+            reward_crit_solved = 0
+        reward = reward_p + reward_q + reward_volt_viol + reward_crit_solved
 
         # if(time_step%2000==0 and time_step>0):
         #     print(f'###DEBUG###\nTime step: {time_step}, \nSum curtailment[%]: {(curtailment_percent):.3f}, \nVoltage penalty: {volatge_violation:.4f}, \nTotal reward: {(reward):.3f}')
 
         # rlagent.history.append(reward)
-        rlagent.history.append([reward_p, reward_q, reward_volt_viol, reward_result,reward])
+        rlagent.history.append([reward_p, reward_q, reward_volt_viol, reward_crit_solved,reward])
         #Keep track of the curtailment as % and the actual value as MW -> [%, kW]
-        rlagent.curtailment.append([curtailment_percent, np.sum(next_gen_p * action_p), np.sum(next_gen_p), np.sum(action_q)])
+        rlagent.curtailment.append([curtailment_percent, np.sum(next_gen_p * action_p), np.sum(next_gen_p), np.sum(action_q), np.sum(np.abs(action_q))])
 
 
         ### --- Next state --- ###
