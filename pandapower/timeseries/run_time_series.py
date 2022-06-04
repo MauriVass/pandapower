@@ -2,6 +2,7 @@
 
 # Copyright (c) 2016-2022 by University of Kassel and Fraunhofer Institute for Energy Economics
 # and Energy System Technology (IEE), Kassel. All rights reserved.
+from random import getstate
 import tempfile
 from collections.abc import Iterable
 import tqdm
@@ -161,21 +162,21 @@ def get_state(ts_variables, time_step):
     return state
 
 def volatge_violation_function(vm_pus):
-	violations = []
-	a = 0.7
-	m = 1
-	tollerance = 0.05
-	for vm in vm_pus:
-		diff = 1-vm
-		q = a*(tollerance**2) - m * tollerance
-		if(np.abs(diff)<tollerance):
-			v = a*(np.abs(diff)**2)
-		elif(diff>0):
-			v = m * diff + q
-		else:
-			v = -m * diff + q
-		violations.append(v)
-	return violations
+    violations = []
+    a = 0.7
+    m = 2
+    tollerance = 0.05
+    for vm in vm_pus:
+        diff = 1-vm
+        q = a*(tollerance**2) - m * tollerance
+        if(np.abs(diff)<tollerance):
+            v = a*(np.abs(diff)**2)
+        elif(diff>0):
+            v = m * diff + q
+        else:
+            v = -m * diff + q
+        violations.append(v)
+    return violations
 
 def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_control, output_writer_fct=_call_output_writer,
                   **kwargs):
@@ -209,13 +210,15 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         ### --- Choose action --- ###
         action = rlagent.choose_action(state, explore=train)
         action = action.numpy()
-        action_len = int(len(action)/2)
-        action_p = action[:action_len]
-        action_q = action[action_len:]
-        # action_q = action
-        # print(action.shape)
-        # print(action_p.shape)
-        # print(action_q.shape)
+        action_p = action
+        action_q = 0
+        #2 actions
+        # action_len = int(len(action)/2)
+        # action_p = action[:action_len]
+        # rlagent.p_for_gen += action_p
+        #
+        # action_q = action[action_len:]
+        # rlagent.q_for_gen += action_q
 
         #Apply the chosen action -> curtail the generators at time step t+1
         next_gen_p = genp_controller.data_source.get_time_step_value(time_step=time_step+1,
@@ -225,7 +228,8 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         genp_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genp_controller.profile_name, values=updated_values)
 
         genq_controller = ts_variables['controller_order'][0][3][0]
-        updated_values =  action_q
+        # updated_values =  action_q #2 actions
+        updated_values =  - np.sqrt( np.square(next_gen_p) - np.square(updated_values) )
         genq_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genq_controller.profile_name, values=updated_values)
 
         ### --- Run PF --- ###
@@ -287,10 +291,10 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         ###Third try. RF #3
         curtailment_percent = np.sum(next_gen_p * action_p) #np.sum(action_p)
         reacrive_power_changes = np.sum(np.abs(action_q))
-        alpha_p = 5      #20 #good resutls (nice plot, lot of unwanted p, lot of uv)
-        alpha_q = 0.5      #2
-        beta = 10         #100
-        gamma = 4        #200
+        alpha_p = 5      # 5
+        alpha_q = 0.5      #
+        beta = 200         #200
+        gamma = 100        #100
         reward_p = - alpha_p * curtailment_percent
         reward_q = - alpha_q * reacrive_power_changes
 
@@ -308,6 +312,7 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         else:
             reward_crit_solved = 0
         reward = reward_p + reward_q + reward_volt_viol + reward_crit_solved
+        # reward = reward_volt_viol + reward_crit_solved
         # reward = np.clip(reward, -70, 30)
         # if(time_step%2000==0 and time_step>0):
         #     print(f'###DEBUG###\nTime step: {time_step}, \nSum curtailment[%]: {(curtailment_percent):.3f}, \nVoltage penalty: {volatge_violation:.4f}, \nTotal reward: {(reward):.3f}')
@@ -338,8 +343,17 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
             rlagent.increment_step_counter()
 
         #Reset changes
+        # state = get_state(ts_variables,time_step+1)
         genp_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genp_controller.profile_name, values=next_gen_p)
+        # n_state = get_state(ts_variables,time_step+1)
+
+        # a = genq_controller.data_source.get_time_step_value(time_step=time_step+1,
+        #                                                profile_name=genq_controller.profile_name,
+        #                                                scale_factor=1)
         genq_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genq_controller.profile_name, values=0)
+        # b = genq_controller.data_source.get_time_step_value(time_step=time_step+1,
+        #                                                profile_name=genq_controller.profile_name,
+        #                                                scale_factor=1)
     else:
         control_time_step(ts_variables['controller_order'], time_step)
         try:
