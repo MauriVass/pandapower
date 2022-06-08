@@ -164,7 +164,7 @@ def get_state(ts_variables, time_step):
 def volatge_violation_function(vm_pus):
     violations = []
     a = 0.7
-    m = 2
+    m = 1
     tollerance = 0.05
     for vm in vm_pus:
         diff = 1-vm
@@ -210,15 +210,16 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         ### --- Choose action --- ###
         action = rlagent.choose_action(state, explore=train)
         action = action.numpy()
-        action_p = action
-        action_q = 0
+        #1 action p
+        # action_p = action
+        # action_q = 0
         #2 actions
-        # action_len = int(len(action)/2)
-        # action_p = action[:action_len]
-        # rlagent.p_for_gen += action_p
-        #
-        # action_q = action[action_len:]
-        # rlagent.q_for_gen += action_q
+        action_len = int(len(action)/2)
+        action_p = action[:action_len]
+        rlagent.p_for_gen += action_p
+
+        action_q = action[action_len:]
+        rlagent.q_for_gen += action_q
 
         #Apply the chosen action -> curtail the generators at time step t+1
         next_gen_p = genp_controller.data_source.get_time_step_value(time_step=time_step+1,
@@ -228,8 +229,8 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         genp_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genp_controller.profile_name, values=updated_values)
 
         genq_controller = ts_variables['controller_order'][0][3][0]
-        # updated_values =  action_q #2 actions
-        updated_values =  - np.sqrt( np.square(next_gen_p) - np.square(updated_values) )
+        # updated_values =  - np.sqrt( np.square(next_gen_p) - np.square(updated_values) ) #1 action
+        updated_values =  action_q #2 actions
         genq_controller.data_source.set_time_step_value(time_step=time_step+1, profile_name=genq_controller.profile_name, values=updated_values)
 
         ### --- Run PF --- ###
@@ -256,9 +257,6 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
 
         ### --- Calculate reward --- ###
         vm_pus = net.res_bus.vm_pu.drop(58) #Remove external grid
-        # max_vm_pu = np.max(vm_pus)
-        # print(f'Max: {max_vm_pu}, max: {np.min(vm_pus)}, mean: {np.mean(vm_pus)}, sum: {np.sum(vm_pus)}')
-        # min_vm_pu = np.min(vm_pus)
 
         ###First try (bad results). RF #1
         # tollerance = 0.1
@@ -289,12 +287,12 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         # 1 - 1 - critical situation before and after the agent's action (NOT REALLY OK, -gamma punishment)
 
         ###Third try. RF #3
-        curtailment_percent = np.sum(next_gen_p * action_p) #np.sum(action_p)
+        curtailment_percent = np.sum(action_p) #np.sum(next_gen_p * action_p) #np.sum(action_p)
         reacrive_power_changes = np.sum(np.abs(action_q))
-        alpha_p = 5      # 5
-        alpha_q = 0.5      #
-        beta = 200         #200
-        gamma = 100        #100
+        alpha_p = 1      # 1
+        alpha_q = 0.1      #0.1
+        beta = 30         #30
+        gamma = 10        #10
         reward_p = - alpha_p * curtailment_percent
         reward_q = - alpha_q * reacrive_power_changes
 
@@ -303,12 +301,12 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
 
         is_critical_situation = np.max(vm_pus) > 1.05 or np.min(vm_pus) < 0.95
         if(vm_pu_labels is not None):
-            reward_crit_solved = gamma * (vm_pu_labels[time_step] - 4 * is_critical_situation)
+            reward_crit_solved = gamma * (2*vm_pu_labels[time_step] - 4 * is_critical_situation - 1)
             #Cases:
-            # 0 - 0 - no critical situation before and after the agent's action (OK, no reward)
-            # 0 - 1 - no critical situation before but introduced after the agent's action (WORST POSSIBLE CASE, -4*gamma punishment)
-            # 1 - 0 - critical situation before and solved after the agent's action (BEST POSSIBLE CASE, +gamma reward)
-            # 1 - 1 - critical situation before and after the agent's action (NOT REALLY OK, -3gamma punishment)
+            # 0 - 0 - no critical situation before and after the agent's action (OK, no reward) -1
+            # 0 - 1 - no critical situation before but introduced after the agent's action (WORST POSSIBLE CASE, -4*gamma punishment) -5
+            # 1 - 0 - critical situation before and solved after the agent's action (BEST POSSIBLE CASE, +gamma reward) +1
+            # 1 - 1 - critical situation before and after the agent's action (NOT REALLY OK, -3gamma punishment) -3
         else:
             reward_crit_solved = 0
         reward = reward_p + reward_q + reward_volt_viol + reward_crit_solved
@@ -318,10 +316,12 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         #     print(f'###DEBUG###\nTime step: {time_step}, \nSum curtailment[%]: {(curtailment_percent):.3f}, \nVoltage penalty: {volatge_violation:.4f}, \nTotal reward: {(reward):.3f}')
 
         # rlagent.history.append(reward)
+        rlagent.history_actions.append(action_p)
         if(train):
             rlagent.history.append([reward_p, reward_q, reward_volt_viol, reward_crit_solved,reward])
+            rlagent.history_noscale.append([curtailment_percent, reward_q, voltage_violation, (vm_pu_labels[time_step] - 4 * is_critical_situation),reward])
         else:
-            rlagent.history_test.append([reward_p, reward_q, reward_volt_viol, reward_crit_solved,reward])
+            rlagent.history_test.append([reward_p, reacrive_power_changes, reward_volt_viol, reward_crit_solved,reward])
 
         #Keep track of the curtailment as % and the actual value as MW -> [%, kW]
         rlagent.curtailment.append([curtailment_percent, np.sum(next_gen_p * action_p), np.sum(next_gen_p), np.sum(action_q), np.sum(np.abs(action_q))])
