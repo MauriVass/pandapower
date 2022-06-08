@@ -163,7 +163,7 @@ def get_state(ts_variables, time_step):
 
 def volatge_violation_function(vm_pus):
     violations = []
-    a = 0.7
+    a = 0.2
     m = 1
     tollerance = 0.05
     for vm in vm_pus:
@@ -289,10 +289,10 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         ###Third try. RF #3
         curtailment_percent = np.sum(action_p) #np.sum(next_gen_p * action_p) #np.sum(action_p)
         reacrive_power_changes = np.sum(np.abs(action_q))
-        alpha_p = 1      # 1
-        alpha_q = 0.1      #0.1
-        beta = 30         #30
-        gamma = 10        #10
+        alpha_p = 4      # 1
+        alpha_q = 2      #0.1
+        beta = 100         #30
+        gamma = 20        #10
         reward_p = - alpha_p * curtailment_percent
         reward_q = - alpha_q * reacrive_power_changes
 
@@ -319,9 +319,9 @@ def run_time_step_rl(net, time_step, rl, ts_variables, run_control_fct=run_contr
         rlagent.history_actions.append(action_p)
         if(train):
             rlagent.history.append([reward_p, reward_q, reward_volt_viol, reward_crit_solved,reward])
-            rlagent.history_noscale.append([curtailment_percent, reward_q, voltage_violation, (vm_pu_labels[time_step] - 4 * is_critical_situation),reward])
+            rlagent.history_noscale.append([curtailment_percent, reacrive_power_changes, voltage_violation, (vm_pu_labels[time_step] - 4 * is_critical_situation),reward])
         else:
-            rlagent.history_test.append([reward_p, reacrive_power_changes, reward_volt_viol, reward_crit_solved,reward])
+            rlagent.history_test.append([reward_p, reward_q, reward_volt_viol, reward_crit_solved,reward])
 
         #Keep track of the curtailment as % and the actual value as MW -> [%, kW]
         rlagent.curtailment.append([curtailment_percent, np.sum(next_gen_p * action_p), np.sum(next_gen_p), np.sum(action_q), np.sum(np.abs(action_q))])
