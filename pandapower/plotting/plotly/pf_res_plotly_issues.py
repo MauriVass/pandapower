@@ -19,9 +19,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def pf_res_plotly(net, cmap="Jet", use_line_geodata=None, on_map=False, projection=None,
+def pf_res_plotly_issues(net, cmap="Jet", use_line_geodata=None, on_map=False, projection=None,
                   map_style='basic', figsize=1, aspectratio='auto', line_width=2, bus_size=10,
-                  climits_volt=(0.9, 1.1), climits_load=(0, 100), cpos_volt=1.0, cpos_load=1.1,
+                  climits_issues=(0.9, 1.1), cpos_volt=1.0, cpos_load=1.1,
                   filename="temp-plot.html", auto_open=True):
     """
         Plots a pandapower network in plotly
@@ -79,7 +79,9 @@ def pf_res_plotly(net, cmap="Jet", use_line_geodata=None, on_map=False, projecti
             **figure** (graph_objs._figure.Figure) figure object
 
     """
-
+    #Mauri
+    #Hard-coded columns name (if need can be added as a parameter to the function)
+    colormap_column = 'issues'
     version_check()
     if 'res_bus' not in net or net.get('res_bus').shape[0] == 0:
         logger.warning('There are no Power Flow results. A Newton-Raphson power flow will be executed.')
@@ -118,14 +120,13 @@ def pf_res_plotly(net, cmap="Jet", use_line_geodata=None, on_map=False, projecti
     # initializating bus trace
     # hoverinfo which contains name and pf results
     precision = 3
+    #Mauri
     hoverinfo = (
             net.bus.name.astype(str) + '<br />' +
-            'V_m = ' + net.res_bus.vm_pu.round(precision).astype(str) + ' pu' + '<br />' +
-            'V_m = ' + (net.res_bus.vm_pu * net.bus.vn_kv.round(2)).round(precision).astype(str) + ' kV' + '<br />' +
-            'V_a = ' + net.res_bus.va_degree.round(precision).astype(str) + ' deg').tolist()
+            'Issues = ' + net.res_bus.issues.round(precision).astype(str)).tolist()
     hoverinfo = pd.Series(index=net.bus.index, data=hoverinfo)
-    bus_trace = create_bus_trace(net, net.bus.index, size=bus_size, infofunc=hoverinfo, cmap=cmap,
-                                 cbar_title='Bus Voltage [pu]', cmin=climits_volt[0], cmax=climits_volt[1],
+    bus_trace = create_bus_trace(net, net.res_bus.index, size=bus_size, infofunc=hoverinfo, cmap=cmap,
+                                 cbar_title='Number issues', cmin=climits_issues[0], cmax=climits_issues[1], colormap_column=colormap_column,
                                  cpos=cpos_volt)
 
     # ----- Lines ------
@@ -138,21 +139,20 @@ def pf_res_plotly(net, cmap="Jet", use_line_geodata=None, on_map=False, projecti
         logger.warning("No or insufficient line geodata available --> only bus geodata will be used.")
         use_line_geodata = False
     # hoverinfo which contains name and pf results
+    #Mauri
     hoverinfo = (
             net.line.name.astype(str) + '<br />' +
-            'I = ' + net.res_line.loading_percent.round(precision).astype(str) + ' %' + '<br />' +
-            'I_from = ' + net.res_line.i_from_ka.round(precision).astype(str) + ' kA' + '<br />' +
-            'I_to = ' + net.res_line.i_to_ka.round(precision).astype(str) + ' kA' + '<br />').tolist()
+            'Issues = ' + net.res_line.issues.round(precision).astype(str)).tolist()
     hoverinfo = pd.Series(index=net.line.index, data=hoverinfo)
     line_traces = create_line_trace(net, use_line_geodata=use_line_geodata, respect_switches=True,
                                     width=line_width,
                                     infofunc=hoverinfo,
                                     cmap=cmap_lines,
-                                    cmap_vals=net.res_line['loading_percent'].values,
-                                    cmin=climits_load[0],
-                                    cmax=climits_load[1],
-                                    cbar_title='Line Loading [%]',
-                                    cpos=cpos_load)
+                                    cmap_vals=net.res_line[colormap_column].values,
+                                    cmin=climits_issues[0],
+                                    cmax=climits_issues[1],
+                                    show_colorbar=True,
+                                    colormap_column=colormap_column)
 
     # ----- Trafos ------
     # hoverinfo which contains name and pf results
